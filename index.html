@@ -246,7 +246,7 @@
 
 <!-- Three.js + Cannon.js + Socket.IO -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/cannon-es@0.20.0/dist/cannon-es.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.5.4/socket.io.min.js"></script>
 <script>
 "use strict";
@@ -343,13 +343,13 @@ world.addContactMaterial(ptContact);
 const playerShape = new CANNON.Cylinder(PLAYER_RADIUS, PLAYER_RADIUS, PLAYER_HEIGHT, 8);
 const playerBody = new CANNON.Body({
     mass: 5,
-    shape: playerShape,
-    position: new CANNON.Vec3(0, 10, 0),
     material: playerCMat,
     linearDamping: 0.05,
     angularDamping: 1.0,
     fixedRotation: true,
 });
+playerBody.addShape(playerShape);
+playerBody.position.set(0, 10, 0);
 playerBody.allowSleep = false;
 world.addBody(playerBody);
 
@@ -413,11 +413,10 @@ function addPlat(x, y, z, w, h, d, color, opts = {}) {
 
     const body = new CANNON.Body({
         mass: 0,
-        shape,
-        position: new CANNON.Vec3(x, y, z),
         material: opts.trampoline ? trampoCMat : groundCMat,
     });
-    body.type = CANNON.Body.STATIC;
+    body.addShape(shape);
+    body.position.set(x, y, z);
     world.addBody(body);
 
     const data = {
@@ -585,10 +584,10 @@ scene.add(grid);
 // Ground physics plane
 const groundBody = new CANNON.Body({
     mass: 0,
-    shape: new CANNON.Plane(),
     material: groundCMat,
 });
-groundBody.quaternion.setFromEulerAngles(-Math.PI/2, 0, 0);
+groundBody.addShape(new CANNON.Plane());
+groundBody.quaternion.setFromAxisAngle(new CANNON.Vec3(1, 0, 0), -Math.PI / 2);
 world.addBody(groundBody);
 
 // Stars
@@ -684,16 +683,30 @@ const others = {}; // id -> { group, bodyMesh, targetPos, targetRot, animState, 
 function createOtherPlayer(id, name) {
     const group = new THREE.Group();
 
-    // Body
-    const bodyMesh = new THREE.Mesh(
-        new THREE.CapsuleGeometry(PLAYER_RADIUS, PLAYER_HEIGHT - PLAYER_RADIUS*2, 4, 12),
+    // Body (Cylinder + Sphere caps since CapsuleGeometry doesn't exist in r128)
+    const bodyGroup = new THREE.Group();
+    const bodyCyl = new THREE.Mesh(
+        new THREE.CylinderGeometry(PLAYER_RADIUS, PLAYER_RADIUS, PLAYER_HEIGHT - PLAYER_RADIUS * 2, 12),
         new THREE.MeshStandardMaterial({
             color: new THREE.Color().setHSL(Math.random(), 0.7, 0.5),
             emissive: 0x222222, metalness: 0.5, roughness: 0.3,
         })
     );
-    bodyMesh.castShadow = true;
-    group.add(bodyMesh);
+    bodyCyl.castShadow = true;
+    bodyGroup.add(bodyCyl);
+    const capTop = new THREE.Mesh(
+        new THREE.SphereGeometry(PLAYER_RADIUS, 8, 8),
+        bodyCyl.material
+    );
+    capTop.position.y = (PLAYER_HEIGHT - PLAYER_RADIUS * 2) / 2;
+    bodyGroup.add(capTop);
+    const capBot = new THREE.Mesh(
+        new THREE.SphereGeometry(PLAYER_RADIUS, 8, 8),
+        bodyCyl.material
+    );
+    capBot.position.y = -(PLAYER_HEIGHT - PLAYER_RADIUS * 2) / 2;
+    bodyGroup.add(capBot);
+    group.add(bodyGroup);
 
     // Eyes
     const eyeGeo = new THREE.SphereGeometry(0.08, 6, 6);
@@ -720,7 +733,7 @@ function createOtherPlayer(id, name) {
 
     scene.add(group);
     return {
-        group, bodyMesh, sprite,
+        group, bodyGroup, sprite,
         targetPos: new THREE.Vector3(),
         targetRot: 0,
         animState: 'idle',
@@ -804,7 +817,7 @@ socket.on('admin_action', (data) => {
     if (data.action === 'kill_all') { respawn(); flashDmg(); }
     if (data.action === 'tp_all') {
         playerBody.position.set(data.x, data.y, data.z);
-        playerBody.velocity.setZero();
+        playerBody.velocity.set(0, 0, 0);
     }
     if (data.action === 'gravity') {
         world.gravity.set(0, GRAVITY * data.value, 0);
@@ -906,7 +919,7 @@ function respawn() {
     } else {
         playerBody.position.set(0, 10, 0);
     }
-    playerBody.velocity.setZero();
+    playerBody.velocity.set(0, 0, 0);
     grounded = false;
     document.getElementById('deathScreen').style.display = 'none';
     document.getElementById('finishScreen').style.display = 'none';
@@ -1236,11 +1249,11 @@ function animate() {
         // Animation
         const oSpeed = o.group.position.distanceTo(o.targetPos);
         if (o.animState === 'jump') {
-            o.bodyMesh.position.y = Math.sin(t * 8) * 0.1;
+            o.bodyGroup.position.y = Math.sin(t * 8) * 0.1;
         } else if (oSpeed > 0.1) {
-            o.bodyMesh.position.y = Math.sin(t * 10) * 0.08;
+            o.bodyGroup.position.y = Math.sin(t * 10) * 0.08;
         } else {
-            o.bodyMesh.position.y = 0;
+            o.bodyGroup.position.y = 0;
         }
 
         // Hide if no update for 10s
@@ -1310,22 +1323,36 @@ window.addEventListener('resize', () => {
 });
 
 // ============================================================
-//  LOADING
+//  LOADING - wait for all libraries
 // ============================================================
-let loadP = 0;
-const loadInt = setInterval(() => {
-    loadP += 8 + Math.random() * 12;
-    if (loadP >= 100) {
-        loadP = 100;
-        clearInterval(loadInt);
-        setTimeout(() => {
-            document.getElementById('loading').classList.add('hidden');
-            document.getElementById('menu').style.display = 'flex';
-        }, 400);
-    }
-    document.getElementById('loadFill').style.width = loadP + '%';
-}, 80);
+function waitForLibs() {
+    const p = document.getElementById('loadFill');
+    let progress = 0;
+    const interval = setInterval(() => {
+        progress += 5 + Math.random() * 10;
+        if (progress > 90) progress = 90;
+        p.style.width = progress + '%';
 
+        if (typeof THREE !== 'undefined' && typeof CANNON !== 'undefined' && typeof io !== 'undefined') {
+            p.style.width = '100%';
+            clearInterval(interval);
+            setTimeout(() => {
+                document.getElementById('loading').classList.add('hidden');
+                document.getElementById('menu').style.display = 'flex';
+            }, 300);
+        }
+    }, 100);
+
+    // Timeout after 15s
+    setTimeout(() => {
+        clearInterval(interval);
+        if (typeof CANNON === 'undefined') {
+            document.querySelector('#loading .sub').textContent = 'ERROR: Cannon.js failed to load. Refresh page.';
+            document.querySelector('#loading .sub').style.color = '#f44';
+        }
+    }, 15000);
+}
+waitForLibs();
 animate();
 </script>
 </body>
