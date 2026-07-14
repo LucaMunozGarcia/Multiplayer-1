@@ -1,6 +1,6 @@
-from flask import Flask, render_template_string, request
+from flask import Flask
 from flask_cors import CORS
-from flask_socketio import SocketIO
+from flask_socketio import SocketIO, emit
 import os
 
 app = Flask(__name__)
@@ -9,49 +9,52 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
 
 players = {}
 
-HTML = open("index.html", "r", encoding="utf-8").read()
-
 @app.route("/")
 def home():
-    return HTML
+    with open("index.html", "r", encoding="utf-8") as f:
+        return f.read()
 
 @socketio.on("connect")
 def handle_connect():
-    players[request.sid] = {"x": 0, "y": 5, "z": 0, "ry": 0}
-    socketio.emit("init", {"id": request.sid, "players": players})
+    from flask import request
+    players[request.sid] = {"x": 0, "y": 3, "z": 0, "ry": 0}
+    emit("init", {"id": request.sid, "players": players}, broadcast=True)
 
 @socketio.on("disconnect")
 def handle_disconnect():
+    from flask import request
     if request.sid in players:
         del players[request.sid]
-    socketio.emit("playerLeft", {"id": request.sid})
+    emit("playerLeft", {"id": request.sid}, broadcast=True)
 
 @socketio.on("move")
 def handle_move(data):
+    from flask import request
     if request.sid in players:
         players[request.sid] = data
-        socketio.emit("playerMoved", {"id": request.sid, "pos": data}, skip_sid=request.sid)
+        emit("playerMoved", {"id": request.sid, "pos": data}, broadcast=True, include_self=False)
 
 @socketio.on("chat")
 def handle_chat(data):
-    socketio.emit("chat", {"id": request.sid, "msg": data["msg"]})
+    from flask import request
+    emit("chat", {"id": request.sid, "msg": data["msg"]}, broadcast=True)
 
 @socketio.on("admin_cmd")
 def handle_admin(data):
     cmd = data.get("cmd")
     if cmd == "kill_all":
-        socketio.emit("admin_action", {"action": "kill_all"})
+        emit("admin_action", {"action": "kill_all"}, broadcast=True)
     elif cmd == "speed_boost":
-        socketio.emit("admin_action", {"action": "speed_boost"})
+        emit("admin_action", {"action": "speed_boost"}, broadcast=True)
     elif cmd == "tp_all":
-        socketio.emit("admin_action", {"action": "tp_all", "x": 0, "y": 50, "z": 0})
+        emit("admin_action", {"action": "tp_all", "x": 0, "y": 50, "z": 0}, broadcast=True)
     elif cmd == "gravity":
-        socketio.emit("admin_action", {"action": "gravity", "value": data.get("value", 0.5)})
+        emit("admin_action", {"action": "gravity", "value": data.get("value", 0.5)}, broadcast=True)
     elif cmd == "freeze":
-        socketio.emit("admin_action", {"action": "freeze"})
+        emit("admin_action", {"action": "freeze"}, broadcast=True)
     elif cmd == "nuke":
-        socketio.emit("admin_action", {"action": "nuke"})
+        emit("admin_action", {"action": "nuke"}, broadcast=True)
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
-    socketio.run(app, host="0.0.0.0", port=port)
+    socketio.run(app, host="0.0.0.0", port=port, allow_unsafe_werkzeug=True)
