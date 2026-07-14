@@ -1,45 +1,62 @@
-from flask import Flask, render_template_string, jsonify, request
+from flask import Flask, render_template, request, jsonify
 from flask_cors import CORS
+from flask_socketio import SocketIO, emit
 import os
 
 app = Flask(__name__)
-
-# Erlaube Zugriffe von anderer Website
 CORS(app)
+socketio = SocketIO(app, cors_allowed_origins="*")
 
-HTML_PAGE = """
-<!DOCTYPE html>
-<html lang="de">
-<head>
-    <meta charset="UTF-8">
-    <title>Hallo Website</title>
-</head>
-<body style="font-family:Arial;text-align:center;margin-top:100px;">
-    <h1>Hallo!</h1>
-    <button onclick="sendenHallo()">Hallo senden</button>
-    <p id="antwort"></p>
-
-    <script>
-        async function sendenHallo() {
-            const res = await fetch('/api/hallo', {
-                method: 'POST'
-            });
-            const data = await res.json();
-            document.getElementById('antwort').innerText = data.message;
-        }
-    </script>
-</body>
-</html>
-"""
+players = {}
 
 @app.route("/")
 def home():
-    return render_template_string(HTML_PAGE)
+    return render_template("index.html")
 
-@app.route("/api/hallo", methods=["POST"])
-def api_hallo():
-    print("SERVER HAT EMPFANGEN: Hallo von Website")
-    return jsonify({"message": "Hallo wurde an den Server gesendet!"})
+@socketio.on("connect")
+def handle_connect():
+    players[request.sid] = {
+        "x": 0, "y": 5, "z": 0,
+        "rx": 0, "ry": 0
+    }
+    emit("init", {"id": request.sid, "players": players}, broadcast=True)
+    print(f"Spieler verbunden: {request.sid}")
+
+@socketio.on("disconnect")
+def handle_disconnect():
+    if request.sid in players:
+        del players[request.sid]
+    emit("playerLeft", {"id": request.sid}, broadcast=True)
+    print(f"Spieler getrennt: {request.sid}")
+
+@socketio.on("move")
+def handle_move(data):
+    if request.sid in players:
+        players[request.sid] = data
+        emit("playerMoved", {"id": request.sid, "pos": data}, broadcast=True, include_self=False)
+
+@socketio.on("chat")
+def handle_chat(data):
+    emit("chat", {"id": request.sid, "msg": data["msg"]}, broadcast=True)
+
+# Admin Befehle
+@socketio.on("admin_cmd")
+def handle_admin(data):
+    cmd = data.get("cmd")
+    if cmd == "kill_all":
+        emit("admin_action", {"action": "kill_all"}, broadcast=True)
+    elif cmd == "speed_boost":
+        emit("admin_action", {"action": "speed_boost", "target": data.get("target", "all")}, broadcast=True)
+    elif cmd == "tp_all":
+        emit("admin_action", {"action": "tp_all", "x": 0, "y": 50, "z": 0}, broadcast=True)
+    elif cmd == "gravity":
+        emit("admin_action", {"action": "gravity", "value": data.get("value", 0.5)}, broadcast=True)
+    elif cmd == "freeze":
+        emit("admin_action", {"action": "freeze"}, broadcast=True)
+    elif cmd == "nuke":
+        emit("admin_action", {"action": "nuke"}, broadcast=True)
+    print(f"ADMIN CMD: {cmd}")
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+    port = int(os.environ.get("PORT", 10000))
+    socketio.run(app, host="0.0.0.0", port=port)
